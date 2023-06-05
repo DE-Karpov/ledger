@@ -8,11 +8,25 @@ import (
 )
 
 func logAccount(account *tb_types.Account) {
+	log.Println("Account Details:")
 	log.Printf("Account ID: %s\n", account.ID)
-	log.Printf("  - Credits Posted: %d\n", account.CreditsPosted)
+	log.Printf("  - Debits Pending: %d\n", account.DebitsPending)
 	log.Printf("  - Debits Posted: %d\n", account.DebitsPosted)
-	//TODO How to store them?
-	//log.Printf("  - Available Balance: %d\n", account.CreditsPosted-account.DebitsPosted)
+	log.Printf("  - Credits Pending: %d\n", account.CreditsPending)
+	log.Printf("  - Credits Posted: %d\n", account.CreditsPosted)
+	log.Println()
+}
+
+func logTransfer(transfer *tb_types.Transfer) {
+	log.Printf("Transfer Details:")
+	log.Printf("  - ID: %s\n", transfer.ID)
+	log.Printf("  - PendingID: %s\n", transfer.PendingID)
+	log.Printf("  - Debit Account ID: %s\n", transfer.DebitAccountID)
+	log.Printf("  - Credit Account ID: %s\n", transfer.CreditAccountID)
+	log.Printf("  - Ledger: %d\n", transfer.Ledger)
+	log.Printf("  - Code: %d\n", transfer.Code)
+	log.Printf("  - Flags: %d\n", transfer.Flags)
+	log.Printf("  - Amount: %d\n", transfer.Amount)
 	log.Println()
 }
 
@@ -30,7 +44,7 @@ func GetBalance(ctx context.Context, debitAccountID string) (interface{}, error)
 	log.Println("Account Details:")
 	logAccount(&account)
 
-	//TODO How to store?
+	//TODO How to store? type inconsistent yet
 	pureBalance := int(account.CreditsPosted) - int(account.DebitsPosted)
 	debitsPending := int(account.DebitsPending)
 	debitsPosted := int(account.DebitsPosted)
@@ -91,7 +105,7 @@ func FreezeFunds(ctx context.Context, debitAccountID, creditAccountID, amount st
 	}
 
 	transfers, err := util.TbClient.LookupTransfers([]tb_types.Uint128{util.Uint128OrPanic(transferID)})
-	if err != nil || transfers == nil {
+	if err != nil || len(transfers) == 0 {
 		log.Printf("Could not fetch transfers: %s\n", err)
 		return nil, err
 	}
@@ -138,18 +152,18 @@ func UnfreezeFunds(ctx context.Context, debitAccountID, creditAccountID, amount,
 	}
 
 	transfers, err := util.TbClient.LookupTransfers([]tb_types.Uint128{util.Uint128OrPanic(transferID)})
-	for _, transfer := range transfers {
-		log.Printf("Transfer Details:")
-		log.Printf("  - ID: %s\n", transfer.ID)
-		log.Printf("  - PendingID: %d\n", transfer.PendingID)
-		log.Printf("  - Debit Account ID: %s\n", transfer.DebitAccountID)
-		log.Printf("  - Credit Account ID: %s\n", transfer.CreditAccountID)
-		log.Printf("  - Ledger: %d\n", transfer.Ledger)
-		log.Printf("  - Code: %d\n", transfer.Code)
-		log.Printf("  - Flags: %d\n", transfer.Flags)
-		log.Printf("  - Amount: %d\n", transfer.Amount)
+	if err != nil {
+		log.Printf("Could not fetch transfers: %s\n", err)
+		return false, err
+	}
 
-		log.Println()
+	if len(transfers) == 0 {
+		log.Println("Inconsistent state")
+		return false, nil
+	}
+
+	for _, transfer := range transfers {
+		logTransfer(&transfer)
 	}
 
 	accounts, err := util.TbClient.LookupAccounts([]tb_types.Uint128{util.Uint128OrPanic(debitAccountID), util.Uint128OrPanic(creditAccountID)})
@@ -164,7 +178,6 @@ func UnfreezeFunds(ctx context.Context, debitAccountID, creditAccountID, amount,
 	}
 
 	for _, account := range accounts {
-		log.Println("Account Details:")
 		logAccount(&account)
 	}
 
@@ -181,6 +194,11 @@ func PostFunds(ctx context.Context, debitAccountID, creditAccountID, amount, fre
 		return false, err
 	}
 
+	if len(accounts) == 0 {
+		log.Println("Inconsistent state")
+		return false, nil
+	}
+
 	for _, account := range accounts {
 		log.Println("Account Details:")
 		logAccount(&account)
@@ -188,7 +206,7 @@ func PostFunds(ctx context.Context, debitAccountID, creditAccountID, amount, fre
 
 	transferID := util.GenerateUUID()
 
-	transferRes, err := util.TbClient.CreateTransfers([]tb_types.Transfer{
+	_, err = util.TbClient.CreateTransfers([]tb_types.Transfer{
 		{
 			ID:              util.Uint128OrPanic(transferID),
 			PendingID:       util.Uint128OrPanic(freezedTransferID),
@@ -205,10 +223,6 @@ func PostFunds(ctx context.Context, debitAccountID, creditAccountID, amount, fre
 		return false, err
 	}
 
-	for _, err := range transferRes {
-		log.Fatalf("Error creating transfer: %s\n", err.Result)
-	}
-
 	transfers, err := util.TbClient.LookupTransfers([]tb_types.Uint128{util.Uint128OrPanic(debitAccountID), util.Uint128OrPanic("100")})
 	if err != nil {
 		log.Printf("Could not fetch transfers: %s\n", err)
@@ -216,19 +230,17 @@ func PostFunds(ctx context.Context, debitAccountID, creditAccountID, amount, fre
 	}
 
 	for _, transfer := range transfers {
-		log.Printf("Transfer Details:")
-		log.Printf("  - ID: %s\n", transfer.ID)
-		log.Printf("  - Debit Account ID: %s\n", transfer.DebitAccountID)
-		log.Printf("  - Credit Account ID: %s\n", transfer.CreditAccountID)
-		log.Printf("  - Ledger: %d\n", transfer.Ledger)
-		log.Printf("  - Code: %d\n", transfer.Code)
-		log.Printf("  - Amount: %d\n", transfer.Amount)
-		log.Println()
+		logTransfer(&transfer)
 	}
 
 	accounts, err = util.TbClient.LookupAccounts([]tb_types.Uint128{util.Uint128OrPanic(debitAccountID), util.Uint128OrPanic(creditAccountID)})
 	if err != nil {
 		log.Fatalf("Could not fetch accounts: %s\n", err)
+	}
+
+	if len(accounts) == 0 {
+		log.Println("Inconsistent state")
+		return false, nil
 	}
 
 	for _, account := range accounts {

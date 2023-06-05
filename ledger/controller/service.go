@@ -25,34 +25,6 @@ type Service struct {
 	Workers        []worker.Worker
 }
 
-//TODO Do we need it? Tigerbeetle has its own...
-//type ClientPool struct {
-//	clients chan *tb.WorkflowClient
-//}
-//
-//func newClientPool(poolSize int, addr []string) (*ClientPool, error) {
-//	clients := make(chan *tb.WorkflowClient, poolSize)
-//	for i := 0; i < poolSize; i++ {
-//		TbClient, err := tb.NewClient(0, addr, 32)
-//		if err != nil {
-//			return nil, fmt.Errorf("error creating TbClient: %s", err)
-//		}
-//		clients <- &TbClient
-//	}
-//
-//	return &ClientPool{
-//		clients: clients,
-//	}, nil
-//}
-//
-//func (p *ClientPool) GetClient() *tb.WorkflowClient {
-//	return <-p.clients
-//}
-//
-//func (p *ClientPool) ReturnClient(client *tb.WorkflowClient) {
-//	p.clients <- client
-//}
-
 func initTigerbeetle() error {
 	id1 := util.Uint128OrPanic("1")
 	id2 := util.Uint128OrPanic("2")
