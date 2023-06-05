@@ -2,15 +2,14 @@ package controller
 
 import (
 	"context"
+	"encore.app/ledger/controller/util"
 	"encore.app/ledger/controller/workflow"
 	encore "encore.dev"
 	"fmt"
-	tb "github.com/tigerbeetledb/tigerbeetle-go"
 	tb_types "github.com/tigerbeetledb/tigerbeetle-go/pkg/types"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 	"log"
-	"os"
 )
 
 var (
@@ -22,44 +21,43 @@ var (
 
 //encore:service
 type Service struct {
-	Client  client.Client
-	Workers []worker.Worker
+	WorkflowClient client.Client
+	Workers        []worker.Worker
 }
 
-type BalanceResponse struct {
-	Available   int
-	Freezed     int
-	WithFreezed int
-}
+//TODO Do we need it? Tigerbeetle has its own...
+//type ClientPool struct {
+//	clients chan *tb.WorkflowClient
+//}
+//
+//func newClientPool(poolSize int, addr []string) (*ClientPool, error) {
+//	clients := make(chan *tb.WorkflowClient, poolSize)
+//	for i := 0; i < poolSize; i++ {
+//		TbClient, err := tb.NewClient(0, addr, 32)
+//		if err != nil {
+//			return nil, fmt.Errorf("error creating TbClient: %s", err)
+//		}
+//		clients <- &TbClient
+//	}
+//
+//	return &ClientPool{
+//		clients: clients,
+//	}, nil
+//}
+//
+//func (p *ClientPool) GetClient() *tb.WorkflowClient {
+//	return <-p.clients
+//}
+//
+//func (p *ClientPool) ReturnClient(client *tb.WorkflowClient) {
+//	p.clients <- client
+//}
 
-type PresentResponse struct {
-	IsPresent bool
-}
+func initTigerbeetle() error {
+	id1 := util.Uint128OrPanic("1")
+	id2 := util.Uint128OrPanic("2")
 
-type AuthorizeResponse struct {
-	Transferred bool
-}
-
-func uint128(value string) tb_types.Uint128 {
-	x, err := tb_types.HexStringToUint128(value)
-	if err != nil {
-		panic(err)
-	}
-	return x
-}
-
-func initTigerbeetle() {
-	TigerBeetleDBClient, err := tb.NewClient(0, []string{"3000"}, 32)
-	if err != nil {
-		log.Fatalf("Error creating TigerBeetleDBClient: %s", err)
-	}
-	defer TigerBeetleDBClient.Close()
-
-	id1 := uint128("1")
-	id2 := uint128("2")
-
-	// Create two accounts
-	res, err := TigerBeetleDBClient.CreateAccounts([]tb_types.Account{
+	_, err := util.TbClient.CreateAccounts([]tb_types.Account{
 		{
 			ID:     id1,
 			Ledger: 1,
@@ -72,12 +70,11 @@ func initTigerbeetle() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("Error creating accounts: %s", err)
+		log.Printf("Error creating accounts: %s", err)
+		return err
 	}
 
-	for _, err := range res {
-		log.Fatalf("Error creating account %d: %s", err.Index, err.Result)
-	}
+	return nil
 }
 
 func initService() (*Service, error) {
@@ -86,12 +83,12 @@ func initService() (*Service, error) {
 		return nil, fmt.Errorf("create temporal TigerBeetleDBClient: %v", err)
 	}
 
-	port := os.Getenv("TB_ADDRESS")
-	if port == "" {
-		port = "3000"
-	}
+	err = initTigerbeetle()
 
-	//initTigerbeetle()
+	if err != nil {
+		log.Fatal("TbClient hasn't been initialized")
+		return nil, err
+	}
 
 	bw := worker.New(c, balanceTaskQueue, worker.Options{})
 	aw := worker.New(c, authorizationTaskQueue, worker.Options{})
@@ -105,7 +102,6 @@ func initService() (*Service, error) {
 	aw.RegisterActivity(workflow.FreezeFunds)
 	aw.RegisterActivity(workflow.UnfreezeFunds)
 	aw.RegisterActivity(workflow.PostFunds)
-	pw.RegisterActivity(workflow.Present)
 
 	if err := bw.Start(); err != nil {
 		c.Close()
@@ -121,14 +117,15 @@ func initService() (*Service, error) {
 	}
 
 	return &Service{
-		Client:  c,
-		Workers: []worker.Worker{bw, aw, pw},
+		WorkflowClient: c,
+		Workers:        []worker.Worker{bw, aw, pw},
 	}, nil
 }
 
 func (s *Service) Shutdown(force context.Context) {
-	s.Client.Close()
+	s.WorkflowClient.Close()
 	for _, localWorker := range s.Workers {
 		localWorker.Stop()
 	}
+	util.TbClient.Close()
 }

@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"encore.app/ledger/controller/util"
 	"log"
 	"sort"
 	"strconv"
@@ -8,12 +9,6 @@ import (
 
 	"go.temporal.io/sdk/workflow"
 )
-
-type BalanceResponse struct {
-	Available   int
-	Freezed     int
-	WithFreezed int
-}
 
 type Authorization struct {
 	ID         string
@@ -32,7 +27,7 @@ func (a Authorizations) Len() int {
 }
 
 func (a Authorizations) Less(i, j int) bool {
-	return a[j].Timestamp-a[i].Timestamp > 0
+	return a[i].Timestamp < a[j].Timestamp
 }
 
 func (a Authorizations) Swap(i, j int) {
@@ -41,18 +36,14 @@ func (a Authorizations) Swap(i, j int) {
 
 var Auths Authorizations
 
-func uint64ToString(value uint64) string {
-	return strconv.FormatUint(value, 10)
-}
-
-func BalanceFlow(ctx workflow.Context, accountID string) (*BalanceResponse, error) {
+func BalanceFlow(ctx workflow.Context, accountID string) (*util.BalanceResponse, error) {
 	options := workflow.ActivityOptions{
 		StartToCloseTimeout: time.Second * 5,
 	}
 
 	ctx = workflow.WithActivityOptions(ctx, options)
 
-	var result *BalanceResponse
+	var result *util.BalanceResponse
 	err := workflow.ExecuteActivity(ctx, GetBalance, accountID).Get(ctx, &result)
 	if err != nil {
 		workflow.GetLogger(ctx).Error("Failed to execute GetBalance activity.", "error", err)
@@ -90,9 +81,14 @@ func AuthorizationFlow(ctx workflow.Context, debitAccountID, creditAccountID, am
 
 	workflow.GetLogger(ctx).Info("FreezeFunds activity executed successfully.")
 
-	var matchedAuth *Authorization
+	var matchedAuth Authorization
 	selector.AddReceive(signalChan, func(channel workflow.ReceiveChannel, more bool) {
 		channel.Receive(ctx, &matchedAuth)
+		defer func() {
+			deleteAuthorization(&matchedAuth)
+			processingDone = true
+			cancelHandler()
+		}()
 		workflow.GetLogger(ctx).Info("Received presentmentMatched signal.")
 
 		err := workflow.ExecuteActivity(ctx, PostFunds, debitAccountID, creditAccountID, amount, matchedAuth.ID).Get(ctx, nil)
@@ -102,16 +98,12 @@ func AuthorizationFlow(ctx workflow.Context, debitAccountID, creditAccountID, am
 			workflow.GetLogger(ctx).Info("PostFunds activity executed successfully.")
 		}
 
-		deleteAuthorization(matchedAuth)
-
-		processingDone = true
-		cancelHandler()
-
 	})
 
 	timerFuture := workflow.NewTimer(childCtx, 100*time.Second)
 	selector.AddFuture(timerFuture, func(f workflow.Future) {
 		if !processingDone {
+			defer deleteAuthorization(&freezedAuthorization)
 			err := workflow.ExecuteActivity(ctx, UnfreezeFunds, debitAccountID, creditAccountID, amount, freezedAuthorization.ID).Get(ctx, freezedAuthorization)
 			if err != nil {
 				workflow.GetLogger(ctx).Error("Failed to execute UnfreezeFunds activity.", "error", err)
@@ -119,7 +111,6 @@ func AuthorizationFlow(ctx workflow.Context, debitAccountID, creditAccountID, am
 				workflow.GetLogger(ctx).Info("UnfreezeFunds activity executed successfully.")
 			}
 
-			deleteAuthorization(&freezedAuthorization)
 		}
 	})
 
